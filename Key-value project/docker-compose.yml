@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  # Express.js application
+  app:
+    build: .
+    container_name: keyvalue-app
+    ports:
+      - "3000:3000"
+    environment:
+      - MONGODB_USER=${KEY_VALUE_STORE_USER}
+      - MONGODB_PASSWORD=${KEY_VALUE_STORE_PASSWORD}
+      - MONGODB_HOST=mongodb
+      - MONGODB_PORT=27017
+      - DB_NAME=${KEY_VALUE_STORE_DB}
+      - PORT=3000
+    depends_on:
+      - mongodb
+    networks:
+      - keyvalue-network
+    restart: unless-stopped
+
+  # MongoDB database
+  mongodb:
+    image: mongo:7
+    container_name: keyvalue-mongodb
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_ROOT_USER}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASSWORD}
+      - MONGO_INITDB_DATABASE=${KEY_VALUE_STORE_DB}
+      - KEY_VALUE_STORE_DB=${KEY_VALUE_STORE_DB}
+      - KEY_VALUE_STORE_USER=${KEY_VALUE_STORE_USER}
+      - KEY_VALUE_STORE_PASSWORD=${KEY_VALUE_STORE_PASSWORD}
+    volumes:
+      - mongodb-data:/data/db
+      - ./db-config/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    networks:
+      - keyvalue-network
+    restart: unless-stopped
+
+# Docker network for container communication
+networks:
+  keyvalue-network:
+    driver: bridge
+
+# Docker volume for data persistence
+volumes:
+  mongodb-data:
+    driver: local
