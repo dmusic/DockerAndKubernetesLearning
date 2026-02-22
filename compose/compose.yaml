@@ -1,0 +1,49 @@
+name: key-value-app
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    ports:
+      - 3000:3000
+    env_file:
+      - .env.db-key-value-cred
+    environment:
+      - MONGODB_HOST=db
+      - PORT=3000
+    networks:
+      - key-value-net
+    depends_on:
+      - db
+    # To watch for changes in the backend source code and automatically restart the container, you can use a tool like nodemon. 
+    # Here's an example of how to set it up in your Dockerfile.dev:
+    develop:
+      watch:
+        - path: ./backend/src
+          action: sync
+          target: /app/src
+  db:
+    image: mongodb/mongodb-community-server:7.0-ubuntu2204
+    ports:
+      - 27017:27017
+    env_file:
+      - .env.db-root-cred
+      - .env.db-key-value-cred
+    volumes:
+      - type: bind
+        source: ./db-config/mongo-init.js
+        target: /docker-entrypoint-initdb.d/mongo-init.js
+        read_only: true
+      #- './db-config/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro'
+      - type: volume
+        source: mongodb-data
+        target: /data/db
+    networks:
+      - key-value-net
+
+volumes:
+  mongodb-data:
+
+networks:
+  key-value-net:
