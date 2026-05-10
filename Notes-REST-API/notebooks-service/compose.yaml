@@ -1,0 +1,87 @@
+# =============================================================================
+# notebooks-service — Standalone Docker Compose
+# =============================================================================
+# Runs notebooks-api + notebooks-mongodb in isolation.
+# Use this during focused development on the notebooks service only.
+#
+# Usage:
+#   cd notebooks-service
+#   docker compose up --build
+#   docker compose down -v        # tear down + remove volume
+#
+# For the full integrated stack (with notes-service + nginx) run:
+#   docker compose up  (from project root)
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # notebooks-api — Express application
+  # ---------------------------------------------------------------------------
+  notebooks-api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    # Reads all env variables from .env (copy from .env.example)
+    env_file: .env
+    depends_on:
+      notebooks-mongodb:
+        # Do not start until MongoDB passes its health check
+        condition: service_healthy
+    networks:
+      - notebooks-network
+    # Port 3000 is intentionally NOT exposed to the host.
+    # In the integrated stack all traffic arrives through nginx.
+    # Uncomment the lines below ONLY for temporary local debugging:
+    # ports:
+    #   - "3001:3000"
+    healthcheck:
+      # Hits the dedicated health endpoint added in TASK-B5.
+      # Returns 200 when the app is up and MongoDB is connected.
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/v1/notebooks/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # Give the Node process time to start before the first probe
+      start_period: 15s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # notebooks-mongodb — Primary database for this service
+  # ---------------------------------------------------------------------------
+  notebooks-mongodb:
+    image: mongo:7.0
+    volumes:
+      # Named volume for persistent data across container restarts
+      - notebooks-mongo-data:/data/db
+    networks:
+      - notebooks-network
+    # Port 27017 is NOT exposed to the host by default.
+    # Uncomment below ONLY in dev to use MongoDB Compass or mongosh locally:
+    # ports:
+    #   - "27018:27017"
+    healthcheck:
+      # ping confirms mongod is accepting connections
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  notebooks-network:
+    # Bridge network isolates notebooks-api ↔ notebooks-mongodb traffic.
+    # notebooks-mongodb must NEVER be added to app-network (see SPEC.md §4).
+    driver: bridge
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  notebooks-mongo-data:
+    # Persists MongoDB data across docker compose down.
+    # Use `docker compose down -v` to also remove this volume (destroys all data).

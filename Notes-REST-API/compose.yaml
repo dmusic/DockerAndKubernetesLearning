@@ -1,0 +1,155 @@
+# =============================================================================
+# Root Integration Compose — Full Stack
+# =============================================================================
+# Merges notebooks-service and notes-service into a single stack and adds
+# the nginx reverse proxy as the sole public entry point.
+#
+# Requires Docker Compose v2 / Docker Desktop >= 4.x.
+#
+# Usage:
+#   docker compose up --build     # first run or after code changes
+#   docker compose up             # subsequent runs (cached images)
+#   docker compose down           # stop and remove containers
+#   docker compose down -v        # also remove all named volumes (destroys data)
+#   docker compose logs -f        # tail logs from all services
+#
+# Individual service development:
+#   cd notebooks-service && docker compose up
+#   cd notes-service     && docker compose up
+# =============================================================================
+
+# All services are defined here so the root compose is fully self-contained.
+# The per-service compose files (notebooks-service/compose.yaml,
+# notes-service/compose.yaml) remain valid for standalone development.
+# Note: Docker Compose v2 does not allow overriding services imported via
+# include:, so we define everything inline here instead.
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # nginx — Reverse proxy and sole public entry point
+  # ---------------------------------------------------------------------------
+  nginx:
+    image: nginx:1.25-alpine
+    ports:
+      # Only port exposed to the host in development.
+      # Production: also expose 443 and configure SSL termination.
+      - "80:80"
+    volumes:
+      # Mount nginx configs as read-only — never bake config into the image.
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+    depends_on:
+      # nginx must not start until both API services report healthy.
+      notebooks-api:
+        condition: service_healthy
+      notes-api:
+        condition: service_healthy
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # notebooks-api — Express application
+  # ---------------------------------------------------------------------------
+  notebooks-api:
+    build:
+      context: ./notebooks-service/api
+      dockerfile: Dockerfile
+    env_file: ./notebooks-service/.env
+    depends_on:
+      notebooks-mongodb:
+        condition: service_healthy
+    networks:
+      - app-network
+      - notebooks-network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/v1/notebooks/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # notebooks-mongodb — Database for notebooks-service
+  # ---------------------------------------------------------------------------
+  notebooks-mongodb:
+    image: mongo:7.0
+    volumes:
+      - notebooks-mongo-data:/data/db
+    networks:
+      - notebooks-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # notes-api — Express application
+  # ---------------------------------------------------------------------------
+  notes-api:
+    build:
+      context: ./notes-service/api
+      dockerfile: Dockerfile
+    env_file: ./notes-service/.env
+    depends_on:
+      notes-mongodb:
+        condition: service_healthy
+    networks:
+      - app-network
+      - notes-network
+    environment:
+      # Docker DNS on app-network resolves 'notebooks-api' to the container IP.
+      # Do NOT change this value when running the integrated stack.
+      # Override in notes-service/.env only for standalone dev.
+      NOTEBOOKS_SERVICE_URL: http://notebooks-api:3000
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # notes-mongodb — Database for notes-service
+  # ---------------------------------------------------------------------------
+  notes-mongodb:
+    image: mongo:7.0
+    volumes:
+      - notes-mongo-data:/data/db
+    networks:
+      - notes-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  app-network:
+    # Shared network connecting nginx, notebooks-api, and notes-api.
+    # Database containers must NEVER be added to this network.
+    driver: bridge
+  notebooks-network:
+    # Isolates notebooks-api ↔ notebooks-mongodb traffic.
+    driver: bridge
+  notes-network:
+    # Isolates notes-api ↔ notes-mongodb traffic.
+    driver: bridge
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  notebooks-mongo-data:
+  notes-mongo-data:

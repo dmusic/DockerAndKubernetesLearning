@@ -1,0 +1,91 @@
+# =============================================================================
+# notes-service — Standalone Docker Compose
+# =============================================================================
+# Runs notes-api + notes-mongodb in isolation.
+# Use this during focused development on the notes service only.
+#
+# Usage:
+#   cd notes-service
+#   docker compose up --build
+#   docker compose down -v        # tear down + remove volume
+#
+# NOTE: When running standalone, NOTEBOOKS_SERVICE_URL in .env should point
+# to a running notebooks-api instance or a mock server, otherwise note
+# creation with notebookId will degrade gracefully (warn log, saves anyway).
+#
+# For the full integrated stack (with notebooks-service + nginx) run:
+#   docker compose up  (from project root)
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # notes-api — Express application
+  # ---------------------------------------------------------------------------
+  notes-api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    # Reads all env variables from .env (copy from .env.example)
+    env_file: .env
+    depends_on:
+      notes-mongodb:
+        # Do not start until MongoDB passes its health check
+        condition: service_healthy
+    networks:
+      - notes-network
+    # Port 3000 is intentionally NOT exposed to the host.
+    # In the integrated stack all traffic arrives through nginx.
+    # Uncomment the lines below ONLY for temporary local debugging:
+    # ports:
+    #   - "3002:3000"
+    healthcheck:
+      # Hits the dedicated health endpoint added in TASK-C5.
+      # Returns 200 plain text "up" when the app is up and MongoDB is connected.
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # Give the Node process time to start before the first probe
+      start_period: 15s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # notes-mongodb — Primary database for this service
+  # ---------------------------------------------------------------------------
+  notes-mongodb:
+    image: mongo:7.0
+    volumes:
+      # Named volume for persistent data across container restarts
+      - notes-mongo-data:/data/db
+    networks:
+      - notes-network
+    # Port 27017 is NOT exposed to the host by default.
+    # Uncomment below ONLY in dev to use MongoDB Compass or mongosh locally:
+    # ports:
+    #   - "27019:27017"
+    healthcheck:
+      # ping confirms mongod is accepting connections
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  notes-network:
+    # Bridge network isolates notes-api ↔ notes-mongodb traffic.
+    # notes-mongodb must NEVER be added to app-network (see SPEC.md §4).
+    driver: bridge
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  notes-mongo-data:
+    # Persists MongoDB data across docker compose down.
+    # Use `docker compose down -v` to also remove this volume (destroys all data).
